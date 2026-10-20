@@ -1,0 +1,67 @@
+name: action
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        blocks: ['OFF', 'ON']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: deps
+        uses: ./
+        with:
+          target-gr-blocks: ${{ matrix.blocks }}
+
+      - name: Check the prefix
+        shell: bash
+        env:
+          BLOCKS: ${{ matrix.blocks }}
+        run: |
+          set -euo pipefail
+          prefix="$GR_DEPS_PREFIX"
+          test -f "$prefix/include/boost/ut.hpp"
+          test -f "$prefix/include/httplib.h"
+          find "$prefix" -name vir-simd-config.cmake | grep -q .
+          soapy=$(find "$prefix" -name SoapySDRConfig.cmake)
+          if [ "$BLOCKS" = ON ] && [ -z "$soapy" ]; then
+            echo "::error::SoapySDR was selected but not installed"; exit 1
+          fi
+          if [ "$BLOCKS" = OFF ] && [ -n "$soapy" ]; then
+            echo "::error::SoapySDR was not selected but is installed"; exit 1
+          fi
+
+  # the same selection, after build has saved it, must be restored rather than rebuilt
+  cached:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        blocks: ['OFF', 'ON']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: deps
+        uses: ./
+        with:
+          target-gr-blocks: ${{ matrix.blocks }}
+
+      - name: Check it was a cache hit
+        shell: bash
+        env:
+          HIT: ${{ steps.deps.outputs.cache-hit }}
+          KEY: ${{ steps.deps.outputs.cache-key }}
+        run: |
+          echo "cache key: $KEY"
+          test "$HIT" = true

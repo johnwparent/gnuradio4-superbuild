@@ -1,0 +1,349 @@
+name: gr-deps
+description: Build the GNU Radio 4 third-party dependencies into one install prefix, cached per selection and toolchain
+
+# Every toggle mirrors a CMake option of the same name in CMakeLists.txt. An empty dependency toggle
+# follows its group, exactly as the CMake default does; the action resolves that itself so the cache
+# key names what is actually built rather than how it was asked for.
+inputs:
+  target-gr-core:
+    description: Group default for the gr-core dependencies (TARGET_GR_CORE)
+    default: 'ON'
+  target-gr-blocks:
+    description: Group default for the gr-blocks dependencies (TARGET_GR_BLOCKS)
+    default: 'OFF'
+  enable-vir-simd:
+    description: Build vir-simd (ENABLE_VIR_SIMD). Empty follows target-gr-core
+    default: ''
+  enable-httplib:
+    description: Build cpp-httplib (ENABLE_HTTPLIB). Empty follows target-gr-core
+    default: ''
+  enable-boost-ut:
+    description: Build boost.ut (ENABLE_BOOST_UT). Empty follows target-gr-core
+    default: ''
+  enable-soapy-sdr:
+    description: Build SoapySDR (ENABLE_SOAPY_SDR). Empty follows target-gr-blocks
+    default: ''
+  enable-tbb:
+    description: Locate TBB, which must already be installed (ENABLE_TBB). Empty means OFF
+    default: ''
+  enable-python3:
+    description: Locate Python 3.12 with NumPy (ENABLE_PYTHON3). Empty follows target-gr-core
+    default: ''
+  build-type:
+    description: Build type for every dependency (GR_DEPS_BUILD_TYPE)
+    default: Release
+  msvc-runtime-static:
+    description: Use the static MSVC runtime (GR_DEPS_MSVC_RUNTIME_STATIC)
+    default: 'OFF'
+  msvc-runtime-debug:
+    description: Debug MSVC runtime, ON, OFF or DEFAULT to follow build-type (GR_DEPS_MSVC_RUNTIME_DEBUG)
+    default: DEFAULT
+  generator:
+    description: CMake generator. Empty uses the CMake default for the runner
+    default: ''
+  c-compiler:
+    description: C compiler, exported as CC to the dependency builds. Empty uses the default
+    default: ''
+  cxx-compiler:
+    description: C++ compiler, exported as CXX to the dependency builds. Empty uses the default
+    default: ''
+  cmake-args:
+    description: Extra arguments for the superbuild configure, one per line. Part of the cache key
+    default: ''
+  install-prefix:
+    description: Install prefix. Empty uses <runner.temp>/gr-deps
+    default: ''
+  build-dir:
+    description: Superbuild binary directory. Empty uses <runner.temp>/gr-deps-build
+    default: ''
+  cache:
+    description: Restore and save the install prefix with actions/cache
+    default: 'true'
+  cache-key-prefix:
+    description: Leading component of the cache key; change it to invalidate every entry
+    default: gr-deps-v1
+  export-env:
+    description: Prepend the prefix to CMAKE_PREFIX_PATH, add <prefix>/bin to PATH and set GR_DEPS_PREFIX for later steps
+    default: 'true'
+
+outputs:
+  install-prefix:
+    description: Absolute path of the install prefix
+    value: ${{ steps.config.outputs.prefix }}
+  cache-hit:
+    description: '"true" when the prefix was restored from an exact cache match and nothing was built'
+    value: ${{ steps.restore.outputs.cache-hit == 'true' }}
+  cache-key:
+    description: The cache key for this selection and toolchain
+    value: ${{ steps.config.outputs.key }}
+  toolchain:
+    description: The C and C++ compilers the toolchain probe found
+    value: ${{ steps.config.outputs.toolchain }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve configuration
+      id: config
+      shell: bash
+      env:
+        IN_TARGET_GR_CORE: ${{ inputs.target-gr-core }}
+        IN_TARGET_GR_BLOCKS: ${{ inputs.target-gr-blocks }}
+        IN_ENABLE_VIR_SIMD: ${{ inputs.enable-vir-simd }}
+        IN_ENABLE_HTTPLIB: ${{ inputs.enable-httplib }}
+        IN_ENABLE_BOOST_UT: ${{ inputs.enable-boost-ut }}
+        IN_ENABLE_SOAPY_SDR: ${{ inputs.enable-soapy-sdr }}
+        IN_ENABLE_TBB: ${{ inputs.enable-tbb }}
+        IN_ENABLE_PYTHON3: ${{ inputs.enable-python3 }}
+        IN_BUILD_TYPE: ${{ inputs.build-type }}
+        IN_MSVC_RUNTIME_STATIC: ${{ inputs.msvc-runtime-static }}
+        IN_MSVC_RUNTIME_DEBUG: ${{ inputs.msvc-runtime-debug }}
+        IN_GENERATOR: ${{ inputs.generator }}
+        IN_CC: ${{ inputs.c-compiler }}
+        IN_CXX: ${{ inputs.cxx-compiler }}
+        IN_CMAKE_ARGS: ${{ inputs.cmake-args }}
+        IN_PREFIX: ${{ inputs.install-prefix }}
+        IN_BUILD_DIR: ${{ inputs.build-dir }}
+        IN_CACHE: ${{ inputs.cache }}
+        IN_CACHE_KEY_PREFIX: ${{ inputs.cache-key-prefix }}
+        IN_EXPORT_ENV: ${{ inputs.export-env }}
+      run: |
+        set -euo pipefail
+
+        lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+        bool() {
+          case "$(lower "$2")" in
+            on | true | yes | y | 1) echo ON ;;
+            off | false | no | n | 0) echo OFF ;;
+            *) echo "::error::gr-deps: $1 must be ON or OFF, got '$2'" >&2; return 1 ;;
+          esac
+        }
+        # an empty toggle takes its fallback, which is how CMakeLists.txt defaults it
+        toggle() { bool "$1" "${2:-$3}"; }
+        slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._' '-'; }
+        sha256() {
+          if command -v sha256sum > /dev/null; then sha256sum; else shasum -a 256; fi | cut -c1-64
+        }
+        # forward slashes on Windows, which both CMake and actions/cache accept; relative to the workspace
+        abspath() {
+          local p="${1//\\//}"
+          case "$p" in
+            /* | [A-Za-z]:/*) ;;
+            *) p="${GITHUB_WORKSPACE//\\//}/$p" ;;
+          esac
+          printf '%s' "${p%/}"
+        }
+
+        core=$(bool target-gr-core "$IN_TARGET_GR_CORE")
+        blocks=$(bool target-gr-blocks "$IN_TARGET_GR_BLOCKS")
+        vir=$(toggle enable-vir-simd "$IN_ENABLE_VIR_SIMD" "$core")
+        httplib=$(toggle enable-httplib "$IN_ENABLE_HTTPLIB" "$core")
+        ut=$(toggle enable-boost-ut "$IN_ENABLE_BOOST_UT" "$core")
+        soapy=$(toggle enable-soapy-sdr "$IN_ENABLE_SOAPY_SDR" "$blocks")
+        tbb=$(toggle enable-tbb "$IN_ENABLE_TBB" OFF)
+        python=$(toggle enable-python3 "$IN_ENABLE_PYTHON3" "$core")
+
+        build_type="${IN_BUILD_TYPE:-Release}"
+        runtime_static=$(bool msvc-runtime-static "$IN_MSVC_RUNTIME_STATIC")
+        runtime_debug="${IN_MSVC_RUNTIME_DEBUG:-DEFAULT}"
+        if [ "$(lower "$runtime_debug")" = default ]; then
+          runtime_debug=DEFAULT
+        else
+          runtime_debug=$(bool msvc-runtime-debug "$runtime_debug")
+        fi
+
+        cache=$(lower "$IN_CACHE")
+        export_env=$(lower "$IN_EXPORT_ENV")
+
+        # the defaults live under runner.temp, so they are ours to clear before a build; a prefix or
+        # build directory the caller names is left alone
+        temp="${RUNNER_TEMP//\\//}"
+        if [ -n "$IN_PREFIX" ]; then prefix=$(abspath "$IN_PREFIX"); owned_prefix=false
+        else prefix="$temp/gr-deps"; owned_prefix=true; fi
+        if [ -n "$IN_BUILD_DIR" ]; then build_dir=$(abspath "$IN_BUILD_DIR"); owned_build=false
+        else build_dir="$temp/gr-deps-build"; owned_build=true; fi
+
+        action_path="${GITHUB_ACTION_PATH//\\//}"
+
+        # the superbuild itself is LANGUAGES NONE, so the compiler the dependencies will use is found
+        # by configuring a throwaway project with the same generator and CC/CXX
+        [ -z "$IN_CC" ] || export CC="$IN_CC"
+        [ -z "$IN_CXX" ] || export CXX="$IN_CXX"
+        generator_args=()
+        [ -z "$IN_GENERATOR" ] || generator_args=(-G "$IN_GENERATOR")
+        probe="$temp/gr-deps-probe"
+        rm -rf "$probe"
+        mkdir -p "$probe/src"
+        cat > "$probe/src/CMakeLists.txt" << 'EOF'
+        cmake_minimum_required(VERSION 3.21)
+        project(gr_deps_toolchain_probe LANGUAGES C CXX)
+        file(WRITE "${CMAKE_BINARY_DIR}/toolchain.txt"
+             "${CMAKE_C_COMPILER_ID}-${CMAKE_C_COMPILER_VERSION}\n${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}\n${CMAKE_SYSTEM_PROCESSOR}\n")
+        EOF
+        if ! cmake -S "$probe/src" -B "$probe/build" ${generator_args[@]+"${generator_args[@]}"} > "$probe/log.txt" 2>&1; then
+          cat "$probe/log.txt"
+          echo "::error::gr-deps: no working C and C++ compiler for this generator; on Windows with Ninja, set up the MSVC environment first"
+          exit 1
+        fi
+        # CMake writes CRLF on Windows
+        { read -r c_compiler; read -r cxx_compiler; read -r processor; } < <(tr -d '\r' < "$probe/build/toolchain.txt")
+        rm -rf "$probe"
+
+        # the pins live in the CMake sources and the build recipe in this file, so a change to either
+        # is a new build
+        sources=$(cat "$action_path/action.yml" "$action_path/CMakeLists.txt" "$action_path"/deps/*.cmake | sha256)
+
+        # keyed on the resolved toggles rather than the groups: the groups only supply defaults, so two
+        # requests that resolve to the same set share an entry
+        manifest=$(cat << EOF
+        os=$RUNNER_OS
+        image=${ImageOS:-}
+        arch=$RUNNER_ARCH
+        processor=$processor
+        c=$c_compiler
+        cxx=$cxx_compiler
+        generator=$IN_GENERATOR
+        build-type=$build_type
+        msvc-runtime-static=$runtime_static
+        msvc-runtime-debug=$runtime_debug
+        vir-simd=$vir
+        httplib=$httplib
+        boost-ut=$ut
+        soapy-sdr=$soapy
+        tbb=$tbb
+        python3=$python
+        cmake-args=$IN_CMAKE_ARGS
+        prefix=$prefix
+        sources=$sources
+        EOF
+        )
+        hash=$(printf '%s' "$manifest" | sha256)
+        bit() { [ "$1" = ON ] && echo 1 || echo 0; }
+        selection="vir$(bit "$vir")-http$(bit "$httplib")-ut$(bit "$ut")-soapy$(bit "$soapy")-tbb$(bit "$tbb")-py$(bit "$python")"
+        platform=$(lower "${ImageOS:-$RUNNER_OS}")
+        key="$IN_CACHE_KEY_PREFIX-$(slug "$platform")-$(slug "$RUNNER_ARCH")-$(slug "$cxx_compiler")-$(slug "$build_type")-$selection-${hash:0:16}"
+
+        echo "gr-deps configuration:"
+        printf '%s\n' "$manifest" | sed 's/^/  /'
+        echo "gr-deps cache key: $key"
+
+        {
+          echo "prefix=$prefix"
+          echo "owned-prefix=$owned_prefix"
+          echo "build-dir=$build_dir"
+          echo "owned-build=$owned_build"
+          echo "action-path=$action_path"
+          echo "key=$key"
+          echo "toolchain=$c_compiler $cxx_compiler"
+          echo "cache=$cache"
+          echo "export-env=$export_env"
+          echo "build-type=$build_type"
+          echo "target-gr-core=$core"
+          echo "target-gr-blocks=$blocks"
+          echo "vir-simd=$vir"
+          echo "httplib=$httplib"
+          echo "boost-ut=$ut"
+          echo "soapy-sdr=$soapy"
+          echo "tbb=$tbb"
+          echo "python3=$python"
+          echo "msvc-runtime-static=$runtime_static"
+          echo "msvc-runtime-debug=$runtime_debug"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Restore cached dependencies
+      id: restore
+      if: steps.config.outputs.cache == 'true'
+      uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.config.outputs.prefix }}
+        key: ${{ steps.config.outputs.key }}
+
+    - name: Build dependencies
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        IN_GENERATOR: ${{ inputs.generator }}
+        IN_CC: ${{ inputs.c-compiler }}
+        IN_CXX: ${{ inputs.cxx-compiler }}
+        IN_CMAKE_ARGS: ${{ inputs.cmake-args }}
+        ACTION_PATH: ${{ steps.config.outputs.action-path }}
+        PREFIX: ${{ steps.config.outputs.prefix }}
+        OWNED_PREFIX: ${{ steps.config.outputs.owned-prefix }}
+        BUILD_DIR: ${{ steps.config.outputs.build-dir }}
+        OWNED_BUILD: ${{ steps.config.outputs.owned-build }}
+        BUILD_TYPE: ${{ steps.config.outputs.build-type }}
+        TARGET_GR_CORE: ${{ steps.config.outputs.target-gr-core }}
+        TARGET_GR_BLOCKS: ${{ steps.config.outputs.target-gr-blocks }}
+        ENABLE_VIR_SIMD: ${{ steps.config.outputs.vir-simd }}
+        ENABLE_HTTPLIB: ${{ steps.config.outputs.httplib }}
+        ENABLE_BOOST_UT: ${{ steps.config.outputs.boost-ut }}
+        ENABLE_SOAPY_SDR: ${{ steps.config.outputs.soapy-sdr }}
+        ENABLE_TBB: ${{ steps.config.outputs.tbb }}
+        ENABLE_PYTHON3: ${{ steps.config.outputs.python3 }}
+        MSVC_RUNTIME_STATIC: ${{ steps.config.outputs.msvc-runtime-static }}
+        MSVC_RUNTIME_DEBUG: ${{ steps.config.outputs.msvc-runtime-debug }}
+      run: |
+        set -euo pipefail
+
+        # a stale prefix from an earlier selection on a reused runner would be saved under this key
+        [ "$OWNED_PREFIX" != true ] || rm -rf "$PREFIX"
+        [ "$OWNED_BUILD" != true ] || rm -rf "$BUILD_DIR"
+
+        # ExternalProject passes the environment, not the superbuild's compiler, to each dependency
+        [ -z "$IN_CC" ] || export CC="$IN_CC"
+        [ -z "$IN_CXX" ] || export CXX="$IN_CXX"
+
+        args=(
+          -S "$ACTION_PATH" -B "$BUILD_DIR"
+          "-DCMAKE_INSTALL_PREFIX=$PREFIX"
+          "-DGR_DEPS_BUILD_TYPE=$BUILD_TYPE"
+          "-DTARGET_GR_CORE=$TARGET_GR_CORE"
+          "-DTARGET_GR_BLOCKS=$TARGET_GR_BLOCKS"
+          "-DENABLE_VIR_SIMD=$ENABLE_VIR_SIMD"
+          "-DENABLE_HTTPLIB=$ENABLE_HTTPLIB"
+          "-DENABLE_BOOST_UT=$ENABLE_BOOST_UT"
+          "-DENABLE_SOAPY_SDR=$ENABLE_SOAPY_SDR"
+          "-DENABLE_TBB=$ENABLE_TBB"
+          "-DENABLE_PYTHON3=$ENABLE_PYTHON3"
+          "-DGR_DEPS_MSVC_RUNTIME_STATIC=$MSVC_RUNTIME_STATIC"
+          "-DGR_DEPS_MSVC_RUNTIME_DEBUG=$MSVC_RUNTIME_DEBUG"
+        )
+        [ -z "$IN_GENERATOR" ] || args+=(-G "$IN_GENERATOR")
+        while IFS= read -r arg || [ -n "$arg" ]; do
+          arg=$(printf '%s' "$arg" | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+          [ -z "$arg" ] || args+=("$arg")
+        done <<< "$IN_CMAKE_ARGS"
+
+        cmake "${args[@]}"
+        # --config matters under a multi-config generator: ExternalProject builds and installs each
+        # dependency in the superbuild's own configuration, not in GR_DEPS_BUILD_TYPE
+        cmake --build "$BUILD_DIR" --config "$BUILD_TYPE" --parallel
+
+    - name: Save dependencies to cache
+      if: steps.config.outputs.cache == 'true' && steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.config.outputs.prefix }}
+        key: ${{ steps.config.outputs.key }}
+
+    - name: Export the prefix
+      if: steps.config.outputs.export-env == 'true'
+      shell: bash
+      env:
+        PREFIX: ${{ steps.config.outputs.prefix }}
+      run: |
+        set -euo pipefail
+        if [ "$RUNNER_OS" = Windows ]; then
+          native=$(cygpath -w "$PREFIX")
+          sep=';'
+          bin="$native\\bin"
+        else
+          native="$PREFIX"
+          sep=':'
+          bin="$native/bin"
+        fi
+        {
+          echo "GR_DEPS_PREFIX=$native"
+          echo "CMAKE_PREFIX_PATH=$native${CMAKE_PREFIX_PATH:+$sep$CMAKE_PREFIX_PATH}"
+        } >> "$GITHUB_ENV"
+        echo "$bin" >> "$GITHUB_PATH"
