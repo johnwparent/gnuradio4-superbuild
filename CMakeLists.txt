@@ -5,8 +5,14 @@ project(GR_DEPS LANGUAGES NONE)
 include(ExternalProject)
 
 # target groups
+option(TARGET_ALL "Build Dependencies needed for all GR libraries" OFF)
 option(TARGET_GR_CORE "Build dependencies needed for core GR development" ON)
 option(TARGET_GR_BLOCKS "Build dependencies needed for GR Blocks development" OFF)
+
+if(TARGET_ALL)
+  set(TARGET_GR_CORE ON)
+  set(TARGET_GR_BLOCKS ON)
+endif()
 
 # individual dependencies, batch enabled by group
 # core requirements, each individually togglable, enabled by group
