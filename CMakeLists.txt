@@ -19,6 +19,7 @@ endif()
 option(ENABLE_VIR_SIMD "Build vir-simd subproject" ${TARGET_GR_CORE})
 option(ENABLE_HTTPLIB "Build cpp-httplib subproject" ${TARGET_GR_CORE})
 option(ENABLE_BOOST_UT "Build boost.ut subproject" ${TARGET_GR_CORE})
+option(ENABLE_MAGIC_ENUM "Build magic-enum subproject" ${TARGET_GR_CORE})
 
 option(ENABLE_SOAPY_SDR "Build soapysdr" ${TARGET_GR_BLOCKS})
 
