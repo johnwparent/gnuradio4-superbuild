@@ -1,0 +1,17 @@
+
+if(ENABLE_MAGIC_ENUM)
+    ExternalProject_Add(
+        magic-enum
+        GIT_REPOSITORY "https://github.com/Neargye/magic_enum.git"
+        GIT_TAG "e1ea11a93d0bdf6aae415124ded6126220fa4f28"
+        INSTALL_DIR "${GR_DEPS_INSTALL_PREFIX}"
+        CMAKE_GENERATOR "${CMAKE_GENERATOR}"
+        CMAKE_ARGS ${GR_DEPS_INSTALL_ARGS} ${GR_DEPS_MSVC_RUNTIME_ARGS}
+                -DMAGIC_ENUM_OPT_INSTALL=ON
+                -DMAGIC_ENUM_OPT_BUILD_TEST=OFF
+                -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF
+        USES_TERMINAL_CONFIGURE TRUE
+        USES_TERMINAL_BUILD TRUE
+        USES_TERMINAL_INSTALL TRUE
+    )
+endif()
