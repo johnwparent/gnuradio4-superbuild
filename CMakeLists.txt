@@ -72,6 +72,14 @@ endif()
 set(GR_DEPS_MSVC_RUNTIME_ARGS -DCMAKE_MSVC_RUNTIME_LIBRARY=${GR_DEPS_MSVC_RUNTIME_LIBRARY}
                               -DCMAKE_POLICY_DEFAULT_CMP0091=NEW)
 
+# All CMake dependencies will need to define these common arguments to establish a unified
+# dependency layout                      
+set(GR_DEPS_INSTALL_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> 
+                         -DCMAKE_PREFIX_PATH=${GR_DEPS_INSTALL_PREFIX}
+                         -DCMAKE_BUILD_TYPE=${GR_DEPS_BUILD_TYPE}
+                        )
+
+
 # set CMake module path so includes look slightly nicer
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/deps)
 
